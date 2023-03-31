@@ -1,0 +1,5 @@
+torch
+torchvision
+pillow
+lz4
+pygame
