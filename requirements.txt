@@ -1,5 +1,7 @@
-torch
-torchvision
+#torch
+#torchvision
 pillow
 lz4
+matplotlib
 pygame
+opencv-python

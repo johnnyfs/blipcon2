@@ -30,99 +30,27 @@
 
 from typing import Optional
 
-import math
+import math, random
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torchvision.transforms as T
 
+import cv2
 import lz4.frame
 import matplotlib.pyplot as plt
+import numpy as np
 import PIL.Image
 
 import pygame
 
-to_tensor = T.ToTensor()
-to_image = T.ToPILImage()
+from dist import MiniDist
+from graphs import *
+from positional import PositionalEncoding
+from states import *
+from video import *
 
-
-# Load an lz4 compressed state file
-def load_states(filename):
-    with lz4.frame.open(filename, 'r') as f:
-        # The first full line is the image state as text
-        prev_gdstr = None
-        prev_buttons = None
-        s = 0
-        while True:
-            header = f.read(11)
-            if header is None:
-                return
-            gdstr = f.read(256 * 240 * 4)
-            if gdstr is None or len(gdstr) != 256 * 240 * 4:
-                return
-            buttons = f.read(8)
-            if buttons is None or len(buttons) != 8:
-                return
-
-            # Poor man's compression
-            if gdstr == prev_gdstr and buttons == prev_buttons:
-                yield None
-
-            # Images are stored as bytes ARGB, where A is always 0
-            PIL.Image.frombytes
-            img = PIL.Image.new('RGB', (256, 240))
-            i = 0
-            for y in range(240):
-                for x in range(256):
-                    img.putpixel((x, y), (gdstr[i + 1], gdstr[i + 2], gdstr[i + 3]))
-                    i += 4
-            state = to_tensor(img)
-            s += 1
-
-            # Action is button states as text "ABsSUDLR"
-            # (where s = select and S = start)
-            action = torch.tensor([float(x) for x in buttons])
-
-            yield (state, action)
-
-
-def pil_to_surface(pil):
-    return pygame.image.fromstring(pil.tobytes(), pil.size, pil.mode).convert()
-
-
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len=1024):
-        super(PositionalEncoding, self).__init__()
-        self.d_model = d_model
-
-        # Create a positional encoding matrix
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)
-        self.register_buffer('pe', pe)
-
-    def forward(self, x):
-        x = x * math.sqrt(self.d_model)
-        x = x + self.pe[:, :x.size(1)]
-        return x
-
-class MiniDist:
-    def __init__(self, params):
-        self.params = params
-        # Split the latent channels into mean and log variance
-        mean, logvar = torch.chunk(params, 2, dim=1)
-        self.mean = mean
-        # Prevent numerical instability
-        self.logvar = torch.clamp(logvar, min=-10, max=10)
-        self.std = torch.exp(0.5 * logvar)
-
-    def sample(self, generator: Optional[torch.Generator]=None):
-        sample = torch.randn(self.mean.shape, device=self.params.device, generator=generator)
-        return self.mean + self.std * sample
 
 # Writer network
 class Writer(nn.Module):
@@ -211,38 +139,79 @@ class Player(nn.Module):
         next_state = self.output_layers(state_embedding)
         return next_state
 
-screen = pygame.display.set_mode((256 * 2, 240))
+
+DISPLAY = True
+if DISPLAY:
+    screen = pygame.display.set_mode((256 * 2, 240 * 2))
 BATCH_SIZE = 64
+MEM_SIZE = 1024
 EMBED_DIM = 64
-player = Player()
-writer = Writer(weights_out=player.get_weight_size(), embed_dim=EMBED_DIM)
-states, actions = [], []
-iteration = 0
+player = Player().to("cuda")
+writer = Writer(weights_out=player.get_weight_size(), embed_dim=EMBED_DIM).to("cuda")
+
 optimizer = torch.optim.Adam(writer.parameters(), lr=1e-3)
 loss_fn = nn.MSELoss()
-for img, buttons in load_states('blipcon2/states.lz4'):
-    print(f"iteration {iteration}")
-    iteration += 1
+losses = []
+loop = 0
 
-    states.append(img)
-    actions.append(buttons)
-    if len(states) < BATCH_SIZE:
-        continue
+if DISPLAY:
+    video_writer = VideoWriter("test.mp4", (256 * 2, 240 * 2))
 
-    weights, latents = writer.forward(torch.stack(states).unsqueeze(0), torch.stack(actions).unsqueeze(0))
-    player.set_weights(weights)
+try:
+    while True:
+        states, actions = [], []
+        training_samples = []
+        iteration = 0
+        for img, buttons in load_states('states.lz4'):
+            print(f"loop {loop}, iteration {iteration}, len(training_samples) {len(training_samples)}")
+            iteration += 1
 
-    for i in range(len(states) - 1):
-        expected = player.forward(writer.get_state_embedding(states[i], actions[i]))
-        optimizer.zero_grad()
-        actual = states[i + 1]
-        screen.blit(pil_to_surface(to_image(actual.squeeze())), (0, 0))
-        screen.blit(pil_to_surface(to_image(expected.squeeze())), (256, 0))
-        pygame.display.flip()
-        loss = loss_fn(expected, actual)
-        loss.backward()
-        print(loss.item())
-        optimizer.step()
+            states.append(img.to("cuda"))
+            actions.append(buttons.to("cuda"))
+            if len(states) < BATCH_SIZE:
+                continue
 
-    states.pop(0)
+            weights, latents = writer.forward(torch.stack(states).unsqueeze(0), torch.stack(actions).unsqueeze(0))
+            player.set_weights(weights)
 
+            total_loss = 0
+            choices = set([ random.randrange(0, len(states) - 1) for _ in range(8) ])
+            training_samples += [ (states[choice], actions[choice], states[choice + 1]) for choice in choices ]
+            sampled_samples = random.sample(training_samples, min(len(training_samples), 8))
+            last_state = (states[-2], actions[-2], states[-1])
+            for i, (state, action, next_state) in enumerate([last_state] + sampled_samples):
+                expected = player.forward(writer.get_state_embedding(state, action))
+                optimizer.zero_grad()
+                actual = next_state
+                if DISPLAY:
+                    if i == 0:
+                        screen.blit(pil_to_surface(to_image(actual)), (0, 0))
+                        screen.blit(pil_to_surface(to_image(expected.squeeze())), (256, 0))
+                loss = loss_fn(expected.squeeze(), actual)
+                loss.backward()
+                total_loss += loss.item()
+                optimizer.step()
+            losses += [total_loss / len(training_samples)]
+
+            # Plot the current losses use a canvas size of 512 x 240 pixels
+            if DISPLAY:
+                filtered = [ l for l in losses if l < 0.1 ]
+                img1 = mk_pil_graph((256, 240), filtered, 'Loss over time', 'Iteration', 'Loss')
+                screen.blit(pil_to_surface(img1), (0, 240))
+                img2 = mk_pil_graph((256, 240), filtered[-100:], 'Recent Loss', 'Iteration', 'Loss')
+                screen.blit(pil_to_surface(img2), (256, 240))
+                pygame.display.flip()
+                
+                # Convert screen to cv2 video frame
+                video_writer.frame_from_surface(screen)
+
+            states.pop(0)
+            actions.pop(0)
+            while len(training_samples) > MEM_SIZE:
+                training_samples.pop(0)
+        loop += 1
+except KeyboardInterrupt:
+    pass
+
+if DISPLAY:
+    video_writer.close()
