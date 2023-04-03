@@ -40,7 +40,6 @@ def load_states(filename):
                     img.putpixel((x, y), (gdstr[i + 1], gdstr[i + 2], gdstr[i + 3]))
                     i += 4
             state = to_tensor(img)
-            print(state)
             s += 1
 
             # Action is button states as text "ABsSUDLR"

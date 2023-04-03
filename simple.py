@@ -16,12 +16,60 @@ import PIL.Image
 
 import pygame
 
+from blipcon import MiniDownBlock, MiniUpBlock
 from graphs import *
 from initializers import *
 from positional import PositionalEncoding
 from loss import combined_masked_loss
 from states import *
 from video import VideoWriter
+
+class ResDown(nn.Module):
+    def __init__(self, in_channels, out_channels, norm_groups, dropout=0.0):
+        super(ResDown, self).__init__()
+        self.norm = nn.GroupNorm(norm_groups, in_channels)
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        hidden = self.norm(x)
+        hidden = self.relu(hidden)
+        hidden = self.conv1(hidden)
+        hidden = self.relu(hidden)
+        hidden = self.dropout(hidden)
+
+        x = self.conv2(x)
+        x = x + hidden
+        x = self.pool(x)
+
+        return x
+    
+class ResUp(nn.Module):
+    def __init__(self, in_channels, out_channels, norm_groups, dropout=0.0):
+        super(ResUp, self).__init__()
+        self.norm = nn.GroupNorm(norm_groups, in_channels)
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
+        self.trans = nn.ConvTranspose2d(out_channels, out_channels, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        hidden = self.norm(x)
+        hidden = self.relu(hidden)
+        hidden = self.conv1(hidden)
+        hidden = self.relu(hidden)
+        hidden = self.dropout(hidden)
+
+        x = self.conv2(x)
+        x = x + hidden
+        x = self.trans(x)
+
+        return x
+
 
 class StatePredictor(nn.Module):
     """
@@ -50,24 +98,24 @@ class StatePredictor(nn.Module):
                  input_channels=3,
                  embed_dim=64,
                  num_heads=4,
-                 conv_layers=[32, 64]):
+                 conv_layers=[32, 64, 64],
+                 norm_groups=8,
+                 dropout=0.0):
         super(StatePredictor, self).__init__()
         
         self.input_layers = nn.Sequential(
             nn.Conv2d(input_channels, conv_layers[0], kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2, padding=0),
-        ) 
+        )
 
-        # Build the state input layers
-        x, y = spatial_dims[0] // 2, spatial_dims[1] // 2
+        # Encoding state
+        x, y = spatial_dims
         for i in range(1, len(conv_layers)):
-            self.input_layers.add_module(f"conv{i}", nn.Conv2d(conv_layers[i - 1], conv_layers[i], kernel_size=3, stride=1, padding=1))
-            self.input_layers.add_module(f"relu{i}", nn.ReLU())
-            self.input_layers.add_module(f"pool{i}", nn.MaxPool2d(kernel_size=2, stride=2, padding=0))
+            self.input_layers.add_module(f"down{i}", ResDown(conv_layers[i - 1], conv_layers[i], norm_groups=norm_groups, dropout=dropout))
             x, y = x // 2, y // 2
+
         self.features_dim = (y, x, conv_layers[-1])
         feature_size = x * y * conv_layers[-1]
+        print("Feature size:", feature_size)
 
         # Build the action input layers
         self.action_embedding = nn.Linear(8, feature_size)
@@ -85,16 +133,18 @@ class StatePredictor(nn.Module):
             nn.Linear(embed_dim, feature_size),
             nn.ReLU(),
         )
-        # Average pool to adaptively reduce the feature size to
-        # a single state (ie, from seq_len x feature_size to feature_size)
+        if dropout > 0.0:
+            self.feedforward.add_module("dropout", nn.Dropout(dropout))
 
-
-        # Decoding
+        # Decoding state
         self.output_layers = nn.Sequential()
         for i in range(len(conv_layers) - 1, 0, -1):
-            self.output_layers.add_module(f"conv{i}", nn.ConvTranspose2d(conv_layers[i], conv_layers[i - 1], kernel_size=3, stride=2, output_padding=1, padding=1))
-            self.output_layers.add_module(f"relu{i}", nn.ReLU())
-        self.output_layers.add_module("conv0", nn.ConvTranspose2d(conv_layers[0], 3, kernel_size=3, stride=2, output_padding=1, padding=1))
+            self.output_layers.add_module(f"up{i}", ResUp(conv_layers[i], conv_layers[i - 1], norm_groups=norm_groups, dropout=dropout))
+            x, y = x * 2, y * 2
+        
+        self.output_layers.add_module(f"norm", nn.GroupNorm(norm_groups, conv_layers[0]))
+        self.output_layers.add_module(f"silu", nn.SiLU())
+        self.output_layers.add_module(f"up", nn.Conv2d(conv_layers[0], input_channels, kernel_size=3, stride=1, padding=1)),
 
     def forward(self, states, actions):
         # Input states are: (batch_size, sequence_size, channels, height, width)
@@ -110,6 +160,7 @@ class StatePredictor(nn.Module):
         action_features = self.action_embedding(actions)
 
         # Restore the batch dimensions so we can positionally encode
+        # (batch * seq, feature_size) -> (batch, seq, feature_size)
         state_features = state_features.view(batch_size, sequence_size, -1)
         action_features = action_features.view(batch_size, sequence_size, -1)
         state_action_features = state_features + action_features
@@ -129,19 +180,23 @@ class StatePredictor(nn.Module):
 
         # Only one state per sequence now, so restore the batch dimension only
         next_states = next_states.view(batch_size, *next_states.shape[1:])
+
         return next_states
     
-DISPLAY = False
-SCALE = 2
+DISPLAY = True
+SCALE = 1
 if DISPLAY:
-    screen = pygame.display.set_mode((256 * 2 * SCALE, 240 * 2 * SCALE))
-    stage = pygame.Surface((256 * 2, 240 * 2))
+    if SCALE == 1:
+        stage = pygame.display.set_mode((256 * 2, 240 * 2))
+    else:
+        screen = pygame.display.set_mode((256 * 2 * SCALE, 240 * 2 * SCALE))
+        stage = pygame.Surface((256 * 2, 240 * 2))
     video_writer = VideoWriter("simple.mp4", (256 * 2, 240 * 2))
 else:
     video_writer = None
 
-BATCH_SIZE = 1
-SEQUENCE_SIZE = 1
+BATCH_SIZE = 8
+SEQUENCE_SIZE = 8
 TOTAL_MIN_SIZE = BATCH_SIZE * SEQUENCE_SIZE + (1 if BATCH_SIZE == 1 else 0)
 loss_fn = nn.MSELoss()
 def step(states, actions, model, optimizer, start=None):
@@ -188,23 +243,35 @@ def step(states, actions, model, optimizer, start=None):
         stage.blit(pil_to_surface(img1), (0, 240))
         img2 = mk_pil_graph((256, 240), losses[-100:], 'Recent Loss', 'Iteration', 'Loss')
         stage.blit(pil_to_surface(img2), (256, 240))
-        pygame.transform.scale(stage, (256 * 2 * SCALE, 240 * 2 * SCALE), screen)
+        if SCALE > 1:
+            pygame.transform.scale(stage, (256 * 2 * SCALE, 240 * 2 * SCALE), screen)
         pygame.display.flip()
 
         video_writer.frame_from_surface(stage)
 
+        for events in pygame.event.get():
+            if events.type == pygame.KEYDOWN:
+                if events.key == pygame.K_e:
+                    model.eval()
+                elif events.key == pygame.K_t:
+                    model.train()
+
     return loss.item()
 
-RELOAD = False
+RELOAD = True
+SAVE = True
 DIFF_WEIGTH = 10.0
 DIFF_THRESHOLD = 0.1
 model = StatePredictor(
     spatial_dims=(240, 256),
     input_channels=3,
-    conv_layers=[32, 64],
+    conv_layers=[32, 64, 64],
     embed_dim=64,
-    num_heads=4
+    num_heads=4,
+    norm_groups=4,
+    dropout=0.2
 ).to("cuda")
+model.train()
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
 did_reload = False
@@ -212,7 +279,7 @@ if RELOAD:
     try:
         model.load_state_dict(torch.load("model.pt"))
         with open('states.pkl', 'rb') as f:
-            epoch, states, action, losses, done_loading = pickle.load(f)
+            epoch, states, actions, losses, done_loading = pickle.load(f)
         print("Loaded model weights and state")
         did_reload = True
     except:
@@ -233,7 +300,7 @@ try:
             states.append(state.to("cuda"))
             actions.append(action.to("cuda"))
 
-            print(f"epoch {epoch}; loaded {len(states)}/{SEQUENCE_SIZE}*{BATCH_SIZE}={TOTAL_MIN_SIZE} minimum states", end='\r')
+            print(f"epoch {epoch}; loaded {len(states)}/{SEQUENCE_SIZE}*{BATCH_SIZE}={TOTAL_MIN_SIZE} minimum states, latest loss: {losses[-8:]}", end='\r')
             if len(states) < TOTAL_MIN_SIZE:
                 continue
             
@@ -245,7 +312,7 @@ try:
     start = 0
     loops = 0
     while True:
-        print(f"epoch {epoch}; replaying sequence at {start} (loop {loops})", end='\r')
+        print(f"epoch {epoch}; replaying sequence at {start} (loop {loops}), latest loss: {losses[-8:]}", end='\r')
         loss = step(epoch, states, actions, model, optimizer, start)
         losses += [loss]
         epoch += 1
@@ -253,16 +320,17 @@ try:
         if start > len(states) - SEQUENCE_SIZE - 1:
             start = 0
         loops += 1
-except:
-    pass
+except KeyboardInterrupt:
+    print("Keyboard interrupt")
 
 if DISPLAY:
     print("closing video writer")
     video_writer.close()
 
 # Save everything
-print("saving states")
-with open('states.pkl', 'wb') as f:
-    pickle.dump((epoch, states, actions, losses, done_loading), f)
+if SAVE:
+    print("saving states")
+    with open('states.pkl', 'wb') as f:
+        pickle.dump((epoch, states, actions, losses, done_loading), f)
 
-torch.save(model.state_dict(), 'model.pt')
+    torch.save(model.state_dict(), 'model.pt')
