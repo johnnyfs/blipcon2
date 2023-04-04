@@ -1,3 +1,5 @@
+import os, pickle, random
+
 import torch
 from torchvision import transforms as T
 
@@ -51,3 +53,49 @@ def load_states(filename):
 
 def pil_to_surface(pil):
     return pygame.image.fromstring(pil.tobytes(), pil.size, pil.mode).convert()
+
+
+def sample_pickled_states(dir_, n_states, length, cache={}):
+    # iterate over all the summary files in the directory
+    summaries = {}
+    total_total = 0
+    if len(cache) == 0:
+        for filename in os.listdir(dir_):
+            if not filename.endswith('_summary.pkl'):
+                continue
+            with open(os.path.join(dir_, filename), 'rb') as f:
+                summary = pickle.load(f)
+                prefix = filename[:-len('_summary.pkl')]
+                summaries[prefix] = summary
+                total_total += summary['total']
+        cache['summaries'] = summaries
+    samples = []
+    for _ in range(n_states):
+        i = random.randrange(0, total_total)
+        seq_len = None
+        for prefix, summary in summaries.items():
+            if i < summary['total']:
+                seq_len = summary['seq_len']
+                break
+            i -= summary['total']
+        # if the remaining length is less than the requested length
+        # then back up enough to get the requested length
+        if i + length > summary['total']:
+            i -= length - (summary['total'] - i)
+        state_file = os.path.join(dir_, f'{prefix}_{i // seq_len}.pkl')
+        # Load the first half of the sequence
+        if state_file not in cache:
+            with open(state_file, 'rb') as f:
+                cache[state_file] = pickle.load(f)
+                sample = cache[state_file][i % seq_len:]
+        if len(sample) < length:
+            next_state_file = os.path.join(dir_, f'{prefix}_{i // seq_len + 1}.pkl')
+            sample += cache[next_state_file][0:length - len(sample)]
+        elif len(sample) > length:
+            sample = sample[0:length]
+        
+        # Sanity test
+        assert(len(sample) == length)
+
+        samples.append(sample)
+    return samples
