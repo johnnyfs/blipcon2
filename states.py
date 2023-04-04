@@ -3,7 +3,7 @@ from torchvision import transforms as T
 
 import pygame
 
-import lz4
+import lz4.frame
 import PIL
 
 to_tensor = T.ToTensor()
