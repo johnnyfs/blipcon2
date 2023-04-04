@@ -32,7 +32,6 @@ for state, action in load_states(args.filename):
     pairs = []
 
 if len(pairs) > 0:
-    n_pairs += 1
     with open(f'{dir_}/{name}_{n_pairs}.pkl', 'wb') as f:
         pickle.dump(pairs, f)
 

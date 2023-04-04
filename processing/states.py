@@ -8,6 +8,8 @@ import pygame
 import lz4.frame
 import PIL
 
+from collections import OrderedDict
+
 to_tensor = T.ToTensor()
 to_image = T.ToPILImage()
 
@@ -51,14 +53,20 @@ def load_states(filename):
             yield (state, action)
 
 
-def pil_to_surface(pil):
-    return pygame.image.fromstring(pil.tobytes(), pil.size, pil.mode).convert()
+def _load_or_add(path, cache, max_size=512):
+    if path in cache['files']:
+        return cache['files'][path]
+    with open(path, 'rb') as f:
+        data = pickle.load(f)
+        if len(cache['files']) > max_size - 1:
+            cache['files'].popitem(last=False)
+        cache['files'][path] = data
+        return data
 
 
-def sample_pickled_states(dir_, n_states, length, cache={}):
+def sample_pickled_states(dir_, n_states, length, cache={}, max_cache_size=512):
     # iterate over all the summary files in the directory
     summaries = {}
-    total_total = 0
     if len(cache) == 0:
         for filename in os.listdir(dir_):
             if not filename.endswith('_summary.pkl'):
@@ -67,32 +75,27 @@ def sample_pickled_states(dir_, n_states, length, cache={}):
                 summary = pickle.load(f)
                 prefix = filename[:-len('_summary.pkl')]
                 summaries[prefix] = summary
-                total_total += summary['total']
         cache['summaries'] = summaries
+        cache['files'] = OrderedDict()
+    else:
+        summaries = cache['summaries']
+    
     samples = []
     for _ in range(n_states):
-        i = random.randrange(0, total_total)
-        seq_len = None
-        for prefix, summary in summaries.items():
-            if i < summary['total']:
-                seq_len = summary['seq_len']
-                break
-            i -= summary['total']
-        # if the remaining length is less than the requested length
-        # then back up enough to get the requested length
-        if i + length > summary['total']:
-            i -= length - (summary['total'] - i)
-        state_file = os.path.join(dir_, f'{prefix}_{i // seq_len}.pkl')
-        # Load the first half of the sequence
-        if state_file not in cache:
-            with open(state_file, 'rb') as f:
-                cache[state_file] = pickle.load(f)
-                sample = cache[state_file][i % seq_len:]
-        if len(sample) < length:
-            next_state_file = os.path.join(dir_, f'{prefix}_{i // seq_len + 1}.pkl')
-            sample += cache[next_state_file][0:length - len(sample)]
-        elif len(sample) > length:
-            sample = sample[0:length]
+        # Decide a file
+        prefix = random.choice(list(summaries.keys()))
+        offset = random.randrange(0, summaries[prefix]['total'] - length)
+        end = offset + length
+        # Load the file
+        sample = []
+        seq_len = summaries[prefix]['seq_len']
+        for i in range(offset, end):
+            file_idx = i // seq_len
+            file_offset = i % seq_len
+            filename = f'{prefix}_{file_idx}.pkl'
+            path = os.path.join(dir_, filename)
+            states = _load_or_add(path, cache, max_cache_size)   
+            sample.append(states[file_offset])
         
         # Sanity test
         assert(len(sample) == length)
