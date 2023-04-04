@@ -1,0 +1,1 @@
+These are old scripts from early tests trying to understand the nature of the data and the problem. They aren't maintained and likely no longer work.
