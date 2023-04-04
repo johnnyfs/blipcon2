@@ -16,13 +16,13 @@ import PIL.Image
 
 import pygame
 
-from blipcon import MiniDownBlock, MiniUpBlock
-from graphs import *
-from initializers import *
-from positional import PositionalEncoding
-from loss import combined_masked_loss
-from states import *
-from video import VideoWriter
+from modules.resnets import MiniDownBlock, MiniUpBlock
+from visualization.graphs import *
+from modules.initializers import *
+from modules.positional import PositionalEncoding
+from modules.loss import combined_masked_loss
+from processing.states import *
+from visualization.video import VideoWriter
 
 class ResDown(nn.Module):
     def __init__(self, in_channels, out_channels, norm_groups, dropout=0.0):

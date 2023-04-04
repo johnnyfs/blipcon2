@@ -1,4 +1,4 @@
-from states import load_states
+from processing.states import load_states
 import pickle
 
 # Collect command line arguments infile, outfile

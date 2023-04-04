@@ -1,7 +1,7 @@
 import torch.nn as nn
 import torch.nn.init as init
 
-from blipcon import MiniResNet, MiniDownBlock, MiniUpBlock
+from modules.resnets import MiniResNet, MiniDownBlock, MiniUpBlock
 
 def init_weights(model, nonlinearity='relu'):
     for m in model.modules():

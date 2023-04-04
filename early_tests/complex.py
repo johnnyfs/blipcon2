@@ -45,11 +45,11 @@ import PIL.Image
 
 import pygame
 
-from dist import MiniDist
-from graphs import *
-from positional import PositionalEncoding
-from states import *
-from video import *
+from modules.dist import MiniDist
+from visualization.graphs import *
+from modules.positional import PositionalEncoding
+from processing.states import *
+from visualization.video import *
 
 
 # Writer network

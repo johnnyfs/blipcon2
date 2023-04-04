@@ -18,7 +18,7 @@ from torchvision import transforms as T
 import PIL
 import pygame
 
-from states import sample_pickled_states
+from processing.states import sample_pickled_states
 
 class BaseAE(nn.Module):
     """
@@ -149,8 +149,8 @@ imgs = []
 model = BaseAE(
     dims=(240, 256),
     hidden_size=1024,
-    dropout=0.0).to("cuda")
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
+    dropout=0.5).to("cuda")
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-5, weight_decay=1e-5)
 loss_fn = nn.MSELoss()
 
 DISPLAY = True
@@ -158,27 +158,27 @@ if DISPLAY:
     screen = pygame.display.set_mode((512, 240))
 
 # Try to load the weights
-RELOAD = True
+RELOAD = False
 SAVE = True
 if RELOAD:
     try:
         print('Loading weights')
-        model.load_state_dict(torch.load('base_ae.pth'))
+        model.load_state_dict(torch.load('data/training/base_ae.pth'))
     except:
         print('No weights found')
 
 print('Loading evaluation sample')
 cache = {}
-eval_batch = [ s[0][0] for s in sample_pickled_states('processed/', BATCH_SIZE, 1, cache=cache, max_cache_size=64) ]
+eval_batch = [ s[0][0] for s in sample_pickled_states('data/processed/', BATCH_SIZE, 1, cache=cache, max_cache_size=64) ]
 eval_batch = torch.stack(eval_batch).to("cuda")
 
 print('Loading training sample')
-sample = [ s[0][0] for s in sample_pickled_states('processed/', BATCH_SIZE, 1, cache=cache, max_cache_size=64) ] 
+sample = [ s[0][0] for s in sample_pickled_states('data/processed/', BATCH_SIZE, 1, cache=cache, max_cache_size=64) ] 
 
 NEW_EVAL_EVERY = 256
 with ThreadPoolExecutor(max_workers=2) as executor:
-    training_future = executor.submit(sample_pickled_states, 'processed/', BATCH_SIZE, 1, cache=cache, max_cache_size=64)
-    eval_future = executor.submit(sample_pickled_states, 'processed/', BATCH_SIZE, 1, cache=cache, max_cache_size=64)
+    training_future = executor.submit(sample_pickled_states, 'data/processed/', BATCH_SIZE, 1, cache=cache, max_cache_size=64)
+    eval_future = executor.submit(sample_pickled_states, 'data/processed/', BATCH_SIZE, 1, cache=cache, max_cache_size=64)
 
     training_losses = []
     eval_losses = []
@@ -189,7 +189,7 @@ with ThreadPoolExecutor(max_workers=2) as executor:
             if training_future.done():
                 print(f'Loading new training sample')
                 sample = [s[0][0] for s in training_future.result()]
-                training_future = executor.submit(sample_pickled_states, 'processed/', BATCH_SIZE, 1, cache=cache, max_cache_size=64)
+                training_future = executor.submit(sample_pickled_states, 'data/processed/', BATCH_SIZE, 1, cache=cache, max_cache_size=64)
             else:
                 random.shuffle(sample)
             eval_epoch += 1
@@ -199,7 +199,7 @@ with ThreadPoolExecutor(max_workers=2) as executor:
                     eval_batch = [s[0][0] for s in eval_future.result()]
                     eval_batch = torch.stack(eval_batch).to("cuda")
                     eval_epoch = 0
-                    eval_future = executor.submit(sample_pickled_states, 'processed/', BATCH_SIZE, 1, cache=cache, max_cache_size=64)
+                    eval_future = executor.submit(sample_pickled_states, 'data/processed/', BATCH_SIZE, 1, cache=cache, max_cache_size=64)
             epoch += 1
 
             batch = torch.stack(sample).to("cuda")
@@ -234,8 +234,8 @@ with ThreadPoolExecutor(max_workers=2) as executor:
     # Save the model weights
     if SAVE:
         print('saving weights')
-        torch.save(model.state_dict(), 'base_ae.pth')
+        torch.save(model.state_dict(), 'data/training/base_ae.pth')
         # Save the losses as a pickle
-        with open('base_ae_losses.pkl', 'wb') as f:
+        with open('data/training/base_ae_losses.pkl', 'wb') as f:
             pickle.dump(training_losses, f)
             pickle.dump(eval_losses, f)
