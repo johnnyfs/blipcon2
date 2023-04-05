@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 import torch.nn.init as init
 
@@ -44,3 +45,21 @@ def init_weights(model, nonlinearity='relu'):
 
         else:
             raise ValueError(f'Unknown module type: {type(m)}')
+
+
+def set_dropout_rate(model, new_dropout_rate):
+    for layer in model.modules():
+        if type(model) == type(model):
+            pass
+        elif isinstance(layer, nn.Dropout) or isinstance(layer, nn.Dropout2d) or isinstance(layer, nn.Dropout3d):
+            layer.p = new_dropout_rate
+        # Blindly recurse
+        elif hasattr(layer, 'modules'):
+            set_dropout_rate(layer, new_dropout_rate)
+
+
+def reset_optimizer_state(optimizer):
+    for state in optimizer.state.values():
+        for k, v in state.items():
+            if isinstance(v, torch.Tensor):
+                state[k] = torch.zeros_like(v)
