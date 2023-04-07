@@ -2,7 +2,7 @@ from typing import Optional
 import torch
 
 
-class MiniDist:
+class MiniDiag:
     def __init__(self, params):
         self.params = params
         # Split the latent channels into mean and log variance

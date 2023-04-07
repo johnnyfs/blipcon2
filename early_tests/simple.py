@@ -19,7 +19,7 @@ import pygame
 from modules.resnets import MiniDownBlock, MiniUpBlock
 from visualization.graphs import *
 from modules.initializers import *
-from modules.positional import PositionalEncoding
+from modules.encoding import PositionalEncoding
 from modules.loss import combined_masked_loss
 from processing.states import *
 from visualization.video import VideoWriter

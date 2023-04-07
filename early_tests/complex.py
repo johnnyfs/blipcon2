@@ -45,9 +45,9 @@ import PIL.Image
 
 import pygame
 
-from modules.dist import MiniDist
+from modules.dist import MiniDiag
 from visualization.graphs import *
-from modules.positional import PositionalEncoding
+from modules.encoding import PositionalEncoding
 from processing.states import *
 from visualization.video import *
 
@@ -88,7 +88,7 @@ class Writer(nn.Module):
         
         q, k, v = self.query(state_action_features), self.key(state_action_features), self.value(state_action_features)
         latents, _ = self.attention_layers(q, k, v)
-        dist = MiniDist(latents)
+        dist = MiniDiag(latents)
 
         if self.do_sample:
             z = dist.sample()

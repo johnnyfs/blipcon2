@@ -2,8 +2,9 @@ import math
 import torch
 from torch import nn
 
+
 class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len=1024):
+    def __init__(self, d_model: int, max_len: int=1024):
         super(PositionalEncoding, self).__init__()
         self.d_model = d_model
 

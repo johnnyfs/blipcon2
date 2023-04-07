@@ -64,9 +64,11 @@ def _load_or_add(path, cache, max_size=512):
         return data
 
 
-def sample_pickled_states(dir_, n_states, length, cache={}, max_cache_size=512):
+def sample_pickled_states(dir_, n_states, length, cache=None, max_cache_size=512):
     # iterate over all the summary files in the directory
     summaries = {}
+    if cache is None:
+        cache = {}
     if len(cache) == 0:
         for filename in os.listdir(dir_):
             if not filename.endswith('_summary.pkl'):

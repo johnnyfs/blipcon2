@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 
-from modules.resnets import MiniResNet, MiniDownBlock, MiniUpBlock
+from modules.blocks import MiniDownBlock, MiniUpBlock
+from modules.resnets import MiniResNet
 
 def init_weights(model, nonlinearity='relu'):
     for m in model.modules():
