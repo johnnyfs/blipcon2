@@ -9,14 +9,33 @@ from .attention import *
 
 
 class MiniMid(nn.Module):
-    def __init__(self, channels: int, norm_groups: int, num_layers: int=1):
+    def __init__(self,
+                 channels: int,
+                 norm_groups: int,
+                 num_layers: int=1,
+                 nonlinearity: Optional[NonLinearity]=NonLinearity.RELU,
+                 dropout: float=0.0,
+                 residual: float=1.0):
         super().__init__()
         self.layers = nn.ModuleList([
-            MiniResNet(channels, channels, norm_groups)
+            MiniResNet(channels,
+                       channels,
+                       norm_groups,
+                       nonlinearity=nonlinearity,
+                       dropout=dropout,
+                       residual=residual)
         ])
         for i in range(num_layers - 1):
-            self.layers.append(MiniAttention(channels, norm_groups))
-            self.layers.append(MiniResNet(channels, channels, norm_groups))
+            self.layers.append(MiniAttention(channels,
+                                             norm_groups,
+                                             nonlinearity=nonlinearity,
+                                             residual=residual))
+            self.layers.append(MiniResNet(channels,
+                                          channels,
+                                          norm_groups,
+                                          nonlinearity=nonlinearity,
+                                          dropout=dropout,
+                                          residual=residual))
 
     def forward(self, x: torch.Tensor):
         for layer in self.layers:

@@ -104,9 +104,9 @@ class MiniMid(nn.Module):
         ])
         for i in range(num_layers - 1):
             self.layers.append(MiniAttention(channels,
-                                             norm_groups,
-                                             nonlinearity=nonlinearity,
-                                             residual=residual))
+                                            norm_groups,
+                                            nonlinearity=nonlinearity,
+                                            residual=residual))
             self.layers.append(MiniResNet(channels,
                                           channels,
                                           norm_groups,

@@ -41,12 +41,12 @@ class UpSample(ModuleEnum):
  
  
 class NonLinearity(ModuleEnum):
-    RELU = 0
-    SIGMOID = 1
-    TANH = 2
-    LEAKY_RELU = 3
-    ELU = 4
-    SILU = 5
+    RELU = 'relu'
+    SIGMOID = 'sigmoid'
+    TANH = 'tanh'
+    LEAKY_RELU = 'leaky_relu'
+    ELU = 'elu'
+    SILU = 'silu'
     
     def get(self, negative_slope: float=None):
         if self == NonLinearity.RELU:
