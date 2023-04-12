@@ -4,14 +4,17 @@ from torch import nn
 from .enums import *
 
 class MiniAttention(nn.Module):
-    def __init__(self, channels, norm_groups, nonlinearity: Optional[NonLinearity], residual: float=1.0):
+    def __init__(self, channels, norm_groups, nonlinearity: Optional[NonLinearity], residual: float=1.0,
+                 embed_size = None):
         super().__init__()
+        if embed_size is None:
+            embed_size = channels
         self.norm = nn.GroupNorm(norm_groups, channels)
         self.act = get_module_for(nonlinearity)
-        self.query = nn.Linear(channels, channels)
-        self.key = nn.Linear(channels, channels)
-        self.value = nn.Linear(channels, channels)
-        self.project = nn.Linear(channels, channels)
+        self.query = nn.Linear(channels, embed_size)
+        self.key = nn.Linear(channels, embed_size)
+        self.value = nn.Linear(channels, embed_size)
+        self.project = nn.Linear(embed_size, embed_size)
         self.residual = residual
 
     def forward(self, x: torch.Tensor):

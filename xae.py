@@ -31,7 +31,8 @@ class NESEncoder(nn.Module):
     def __init__(self,
                  nonlinearity: Optional[NonLinearity]=NonLinearity.RELU,
                  spatial_channels: int=64,
-                 color_channels: int=8):
+                 color_channels: int=8,
+                 norm_groups: int=8):
         """
         The goal of the model is to learn
         - the set of 256 8x8 4-color monochromatic tiles from which the image
@@ -47,20 +48,29 @@ class NESEncoder(nn.Module):
           (15,14), so if that value is 3, hen for each index 0 in that position it
           samples from the first color in the third palette.
         """
+        super().__init__()
+        
         # common: (b, 3, 240, 256) -> (b, ch, 120, 128)
         self.spatial_common = nn.Sequential(
             nn.Conv2d(3, spatial_channels, 3, padding=1),
-            nn.GroupNorm(1, spatial_channels),
-            get_module_for(nonlinearity),
-            nn.AvgPool2d(2)
+            MiniDownBlock(in_channels=spatial_channels,
+                          out_channels=spatial_channels,
+                          norm_groups=norm_groups,
+                          num_layers=1,
+                          nonlinearity=nonlinearity,
+                          down_type=DownSample.AVG_POOL)
         )
         
         # patterns: (b, ch, 120, 128) -> (b, 4, 16*8, 16*8)
+        pattern_channels = spatial_channels
         self.patterns = nn.Sequential(
-            nn.UpsamplingBilinear2d((129, 129)),
-            nn.Conv2d(spatial_channels, spatial_channels, 3),
-            nn.GroupNorm(4, spatial_channels),
-            get_module_for(nonlinearity)
+            nn.UpsamplingBilinear2d((16*8, 16*8)),
+            nn.Conv2d(spatial_channels, pattern_channels, 3, padding=1),
+            nn.GroupNorm(4, pattern_channels),
+            get_module_for(nonlinearity),
+            nn.Conv2d(pattern_channels, 4, 3, padding=1),
+            nn.GroupNorm(1, 4),
+            get_module_for(nonlinearity),
         )
         
         # names: (b, ch, 240, 256) -> (b, ch, 30, 32)
@@ -69,11 +79,17 @@ class NESEncoder(nn.Module):
             nn.GroupNorm(4, 128),
             get_module_for(nonlinearity),
             nn.AvgPool2d(2, 2),
+            
             nn.Conv2d(128, 256, 3, padding=1),
             nn.GroupNorm(4, 256),
             get_module_for(nonlinearity),
             nn.AvgPool2d(2, 2),
         )
+        self.names_q = nn.Linear(30*32*256, 256)
+        self.names_k = nn.Linear(30*32*256, 256)
+        self.patterns_v = nn.Linear(4*16*8*16*8, 256)
+        self.names_attention = nn.MultiheadAttention(256, 4)
+        self.names_forward = nn.Linear(256, 30*32*256)
         
         # common: (b, 3, 240, 256) -> (b, ch, 30, 32)
         self.color_common = nn.Sequential(
@@ -83,7 +99,7 @@ class NESEncoder(nn.Module):
             nn.AvgPool2d(8, 8)
         )
         
-        # palettes: (b, ch, 30, 32) -> (b, ch, 3, 4)
+        # palettes: (b, ch, 30, 32) -> (b, ch, 4, 3)
         self.palettes = nn.Sequential(
             nn.Conv2d(color_channels, color_channels, 3),
             nn.GroupNorm(1, color_channels),
@@ -91,16 +107,33 @@ class NESEncoder(nn.Module):
             nn.AvgPool2d((7, 10))
         )
         
-        # attributes: (b, ch, 32, 32) -> (b, ch, 15, 16)
+        # attributes: (b, ch, 30, 32) -> (b, ch, 15, 16)
         self.attributes = nn.Sequential(
             nn.Conv2d(color_channels, color_channels, 3, stride=2, padding=1),
             nn.GroupNorm(1, color_channels),
             get_module_for(nonlinearity)
         )
+        
+    def forward(self, x):
+        spatial_common = self.spatial_common(x)
+        patterns = self.patterns(spatial_common)
+        
+        names = self.names(spatial_common)
+        q = self.names_q(names.flatten(1))
+        k = self.names_k(names.flatten(1))
+        v = self.patterns_v(patterns.flatten(1))
+        names = self.names_attention(q, k, v)[0]
+        names = self.names_forward(names).view(-1, 256, 30, 32)
+        
+        color_common = self.color_common(x)
+        palettes = self.palettes(color_common)
+        attributes = self.attributes(color_common)
+        
+        return names, patterns, attributes, palettes
             
 
 class NESDecoder(nn.Module):
-    def __init__(self, channels, nonlinearity=NonLinearity.SILU, dropout=0.0, residual=1.0, temperature=2.0):
+    def __init__(self, channels, nonlinearity=NonLinearity.SILU, dropout=0.0, residual=1.0, temperature=2.0, hard=False):
         super().__init__()
         # incoming shape is (b, ch, 30, 32)
         # No pre-processing or normalization at the first stage
@@ -226,47 +259,53 @@ class NESDecoder(nn.Module):
         # with just the sigmoid, but I worry
         # that it might not be desirable.
         self.temperature = temperature
+        self.hard = hard
         self.final = nn.Sequential(
              nn.Sigmoid()
         )
         
-    def set_temperature(self, temperature):
+    def set_temperature(self, temperature, hard=False):
         self.temperature = temperature
+        self.hard = hard
    
-    def forward(self, x):
-        b = x.shape[0]
+    def forward(self, names, patterns, attributes, palettes):
+        b = names.shape[0]
         
-        tables_common = self.tables_common(x)
-        cat_common = self.cat_common(x)
-        pixels_common = self.pixels_common(x)
-        colors_common = self.colors_common(x)
+        # tables_common = self.tables_common(x)
+        # cat_common = self.cat_common(x)
+        # pixels_common = self.pixels_common(x)
+        # colors_common = self.colors_common(x)
         
-        names = self.to_names(tables_common + pixels_common)
+        # names = self.to_names(tables_common + pixels_common)
         names = names.view(b, 256, 30*32)
         names = names.permute(0, 2, 1)
-        names_idxs = torch.nn.functional.gumbel_softmax(names, tau=self.temperature, hard=False)
+        names_idxs = torch.nn.functional.gumbel_softmax(names, tau=self.temperature, hard=self.hard)
         
         
-        patterns = self.to_patterns(cat_common + pixels_common)
+        # patterns = self.to_patterns(cat_common + pixels_common)
         # patterns = patterns.view(b, 256, 8*8, 4)
-        # patterns = torch.nn.functional.gumbel_softmax(patterns, tau=self.temperature, hard=True)
+        
+        patterns = patterns.view(b, 4, 16, 8, 16, 8)
+        patterns = patterns.permute(0, 2, 4, 3, 5, 1).contiguous()
+        patterns = patterns.softmax(dim=-1)
+        #patterns = torch.nn.functional.gumbel_softmax(patterns, tau=self.temperature, hard=self.hard)
         patterns = patterns.view(b, 256, 8*8*4)
         
-        attributes = self.to_attributes(tables_common + colors_common)
-        attributes = attributes.view(b, 4, 15*16)
+        # attributes = self.to_attributes(tables_common + colors_common)
+        attributes = attributes.view(b, 8, 15*16)
         attributes = attributes.permute(0, 2, 1)
         # Use a lower temperature for the attributes, because
         # they have a lower cardinality
-        attributes_idxs = torch.nn.functional.gumbel_softmax(attributes, tau=self.temperature, hard=False)
+        attributes_idxs = torch.nn.functional.gumbel_softmax(attributes, tau=self.temperature, hard=self.hard)
         
-        palettes = self.to_palettes(cat_common + colors_common)
-        palettes = palettes.view(b, 4, 4*3)
+        # palettes = self.to_palettes(cat_common + colors_common)
+        palettes = palettes.view(b, 8, 4*3)
         
         
         # names: (b, 30*32, 256)
         # patterns: (b, 256, 8*8*4)
-        # attributes: (b, 15*16, 4)
-        # palettes: (b, 4, 4*3)
+        # attributes: (b, 15*16, 8)
+        # palettes: (b, 8, 4*3)
         
         monochrome = torch.matmul(names_idxs, patterns)
         colorization = torch.matmul(attributes_idxs, palettes)
@@ -303,42 +342,45 @@ class ResNetAE(nn.Module):
                  layers_per_block=1,
                  temperature=2.0):
         super().__init__()
-        self.encoder = nn.Sequential(
-            nn.Conv2d(input_channels, layers[0], 3, padding=1),
-        )
-        for i in range(len(layers)):
-            prev = layers[i-1] if i > 0 else layers[0]
-            is_last = i == len(layers) - 1
-            down = DownSample.CONV if not is_last else None
-            print('adding step from {} to {} with down={}'.format(prev, layers[i], down))
-            block = MiniDownBlock(prev,
-                                  layers[i],
-                                  norm_groups=norm_groups,
-                                  num_layers=layers_per_block,
-                                  nonlinearity=nonlinearity,
-                                  down_type=down,
-                                  dropout=dropout,
-                                  residual=residual)
-            self.encoder.add_module(f'dblock{i}', block)
-        self.mid = nn.Sequential(
-            MiniMid(layers[-1],
-                            norm_groups=norm_groups,
-                            num_layers=2,
-                            nonlinearity=nonlinearity,
-                            dropout=dropout,
-                            residual=residual),
-            nn.GroupNorm(norm_groups, layers[-1]),
-            get_module_for(nonlinearity),
-            nn.Conv2d(layers[-1], latent_channels, 1),
-            nn.Conv2d(latent_channels, layers[-1], 1),
-            MiniMid(layers[-1],
-                           norm_groups=norm_groups,
-                           num_layers=2,
-                           nonlinearity=nonlinearity,
-                           dropout=dropout,
-                           residual=residual)
-        )
+        # self.encoder = nn.Sequential(
+        #     nn.Conv2d(input_channels, layers[0], 3, padding=1),
+        # )
+        # for i in range(len(layers)):
+        #     prev = layers[i-1] if i > 0 else layers[0]
+        #     is_last = i == len(layers) - 1
+        #     down = DownSample.CONV if not is_last else None
+        #     print('adding step from {} to {} with down={}'.format(prev, layers[i], down))
+        #     block = MiniDownBlock(prev,
+        #                           layers[i],
+        #                           norm_groups=norm_groups,
+        #                           num_layers=layers_per_block,
+        #                           nonlinearity=nonlinearity,
+        #                           down_type=down,
+        #                           dropout=dropout,
+        #                           residual=residual)
+        #     self.encoder.add_module(f'dblock{i}', block)
+        # self.mid = nn.Sequential(
+        #     MiniMid(layers[-1],
+        #                     norm_groups=norm_groups,
+        #                     num_layers=2,
+        #                     nonlinearity=nonlinearity,
+        #                     dropout=dropout,
+        #                     residual=residual),
+        #     nn.GroupNorm(norm_groups, layers[-1]),
+        #     get_module_for(nonlinearity),
+        #     nn.Conv2d(layers[-1], latent_channels, 1),
+        #     nn.Conv2d(latent_channels, layers[-1], 1),
+        #     MiniMid(layers[-1],
+        #                    norm_groups=norm_groups,
+        #                    num_layers=2,
+        #                    nonlinearity=nonlinearity,
+        #                    dropout=dropout,
+        #                    residual=residual)
+        # )
         # self.decoder = NESDecoder(channels=64)
+        self.encoder = NESEncoder(nonlinearity=nonlinearity,
+                                  spatial_channels=64,
+                                  color_channels=8)
         self.decoder = NESDecoder(channels=layers[-1],
                                   nonlinearity=nonlinearity,
                                   dropout=dropout,
@@ -370,12 +412,11 @@ class ResNetAE(nn.Module):
         pass
 
     def forward(self, x):
-        x = self.encoder(x)
-        x = self.mid(x)
-        return self.decoder(x)
+        names, patterns, attributes, palettes = self.encoder(x)
+        return self.decoder(names, patterns, attributes, palettes)
 
-    def set_temperature(self, temperature):
-        self.decoder.set_temperature(temperature)
+    def set_temperature(self, temperature, hard=False):
+        self.decoder.set_temperature(temperature, hard)
 
 
 def make_frame(stage, screen, actual, predicted,
@@ -412,32 +453,32 @@ def make_frame(stage, screen, actual, predicted,
     stage.blit(img4, (256, 240))
     
     # attributes are 4x15x16
-    attributes_idxs = attributes_idxs.view(4, 15, 16).permute(2, 1, 0).argmax(dim=2)
+    attributes_idxs = attributes_idxs.view(8, 15, 16).permute(2, 1, 0).argmax(dim=2)
     attributes_idxs = attributes_idxs.unsqueeze(-1).repeat_interleave(3, dim=-1)
-    img5 = attributes_idxs.numpy().astype('uint8') * 85
+    img5 = attributes_idxs.numpy().astype('uint8') * 36
     img5 = PIL.Image.fromarray(img5, mode='RGB')
     img5 = pil_to_surface(img5)
     img5 = pygame.transform.scale(img5, (32*8, 30*8))
     stage.blit(img5, (0, 240 + 256))
     
     # palettes are 4,4*3
-    palettes = palettes.view(4, 4, 3)
+    palettes = palettes.view(8, 4, 3)
     img6 = (palettes * 255).numpy().astype('uint8')
     img6 = PIL.Image.fromarray(img6, mode='RGB')
     img6 = pil_to_surface(img6)
-    img6 = pygame.transform.scale(img6, (4*16, 4*16))
+    img6 = pygame.transform.scale(img6, (8*16, 4*16))
     stage.blit(img6, (256, 240 + 256))
     
     pygame.transform.scale(stage, (stage.get_width() * SCALE, stage.get_height() * SCALE), screen)
     pygame.display.flip()
                               
 
-BATCH_SIZE=20
+BATCH_SIZE=16
 DROPOUT=0.5
-LEARNING_RATE=1e-3
-WEIGHT_DECAY=1e-4
+LEARNING_RATE=1e-5
+WEIGHT_DECAY=1e-5
 TEMPERATURE=2.0
-ACT=NonLinearity.SILU
+ACT=NonLinearity.SIGMOID
 
 DISPLAY=True
 SCALE=1
@@ -507,6 +548,7 @@ temperature=TEMPERATURE
 MIN_EPOCHS_BEFORE_SAMPLING = MIN_EPOCHS_PER_NEW_TRAINING_SAMPLE * 2
 min_loss = None
 min_loss_epoch = None
+hard=False
 with ThreadPoolExecutor(max_workers=2) as executor:
     training_future = executor.submit(sample_pickled_states, 'data/processed/', BATCH_SIZE, 1)
     eval_future = executor.submit(sample_pickled_states, 'data/processed/', BATCH_SIZE, 1)
@@ -651,7 +693,7 @@ with ThreadPoolExecutor(max_workers=2) as executor:
                                 temperature /= 2.0
                                 if temperature <= 0.001:
                                     temperature = 0.001
-                            model.set_temperature(temperature)
+                            model.set_temperature(temperature, hard)
                             print(f'Temperature: {temperature}')
                         elif event.key == pygame.K_v:
                             if pygame.key.get_mods() & pygame.KMOD_SHIFT:
@@ -663,6 +705,13 @@ with ThreadPoolExecutor(max_workers=2) as executor:
                                 if eval_index < 0:
                                     eval_index = BATCH_SIZE - 1
                             print(f'Eval index: {eval_index}')
+                        elif event.key == pygame.K_h:
+                            if hard:
+                                hard = False
+                            else:
+                                hard = True
+                            model.set_temperature(temperature, hard)
+                            print(f'Hard: {hard}')
                     
     except KeyboardInterrupt:
         pass
