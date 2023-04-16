@@ -185,3 +185,87 @@ class MiniVae(nn.Module):
         reconstructed = self.decode(sample)
 
         return reconstructed
+    
+class ResNetAE(nn.Module):
+    """
+    A simple autoencoder w/o a variational step that has demonstrated
+    decent performance on 8-bit game images.
+    """
+    def __init__(self,
+                 input_channels=3,
+                 layers=[64, 128, 256, 256],
+                 norm_groups=8,
+                 nonlinearity=NonLinearity.RELU,
+                 dropout=0.0,
+                 residual=1.0,
+                 latent_channels=8,
+                 layers_per_block=1,
+                 temperature=2.0):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Conv2d(input_channels, layers[0], 3, padding=1),
+        )
+        for i in range(len(layers)):
+            prev = layers[i-1] if i > 0 else layers[0]
+            is_last = i == len(layers) - 1
+            down = DownSample.CONV if not is_last else None
+            print('adding step from {} to {} with down={}'.format(prev, layers[i], down))
+            block = MiniDownBlock(prev,
+                                  layers[i],
+                                  norm_groups=norm_groups,
+                                  num_layers=layers_per_block,
+                                  nonlinearity=nonlinearity,
+                                  down_type=down,
+                                  dropout=dropout,
+                                  residual=residual)
+            self.encoder.add_module(f'dblock{i}', block)
+        self.mid = nn.Sequential(
+            MiniMid(layers[-1],
+                            norm_groups=norm_groups,
+                            num_layers=2,
+                            nonlinearity=nonlinearity,
+                            dropout=dropout,
+                            residual=residual),
+            nn.GroupNorm(norm_groups, layers[-1]),
+            get_module_for(nonlinearity),
+            nn.Conv2d(layers[-1], latent_channels, 1),
+            nn.Conv2d(latent_channels, layers[-1], 1),
+            MiniMid(layers[-1],
+                           norm_groups=norm_groups,
+                           num_layers=2,
+                           nonlinearity=nonlinearity,
+                           dropout=dropout,
+                           residual=residual)
+        )
+
+        self.decoder = nn.Sequential()
+        for i in range(len(layers) - 1, -1, -1):
+            next = layers[i-1] if i > 0 else layers[0]
+            is_last = i == 0
+            up = UpSample.TRANSPOSE if not is_last else None
+            print('adding step from {} to {} with up={}'.format(layers[i], next, up))
+            block = MiniUpBlock(layers[i],
+                                next,
+                                norm_groups=norm_groups,
+                                num_layers=layers_per_block,
+                                nonlinearity=nonlinearity,
+                                up_type=up,
+                                dropout=dropout,
+                                residual=residual)
+            self.decoder.add_module(f'ublock{i}', block)
+
+        self.decoder.add_module('final', nn.Conv2d(layers[0], input_channels, 3, padding=1))
+        self.decoder.add_module('sigmoid', nn.Sigmoid())
+        
+    def set_mean_mode(self):
+        pass
+    
+    def set_sample_mode(self):
+        pass
+
+    def forward(self, x):
+        names, patterns, attributes, palettes = self.encoder(x)
+        return self.decoder(names, patterns, attributes, palettes)
+
+    def set_temperature(self, temperature, hard=False):
+        self.decoder.set_temperature(temperature, hard)
