@@ -7,3 +7,4 @@ pygame
 opencv-python
 requests
 argparse
+flask
