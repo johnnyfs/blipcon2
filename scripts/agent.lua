@@ -4,12 +4,29 @@
 -- used to determine the reward for the state. Otherwise,
 -- the reward will be NaN. (Signaling that a novelty-based
 -- reward should be used by the predictor instead.)
-local infilename = args[1]   -- required
-local outfilename = args[2]  -- required
-local game = 'undefined'
-if args:len() > 2 then
-    game = args[3]
+
+function split(inputstr, sep)
+    sep=sep or '%s'
+    local t={}
+    for field,s in string.gmatch(inputstr, "([^"..sep.."]*)("..sep.."?)") do
+        print(field)
+        print(s)
+        table.insert(t,field)
+        if s=="" then
+            return t
+        end
+    end
+    return t
 end
+
+args = split(arg, " ")
+local outfilename = args[1]  -- required
+local infilename = args[2]   -- required
+local game = args[3]
+
+print("infilename: " .. infilename)
+print("outfilename: " .. outfilename)
+print("game: " .. game)
 
 local ADVANCE_REWARD = 100.0 -- also game over penalty
 local LIFE_REWARD = 10.0     -- for gain or loss of 1 life
@@ -20,16 +37,18 @@ local POINT_REWARD = 0.001   -- 1 reward every 1000 points
 local BUTTONS= {
     "A",
     "B",
-    "Select",
-    "Start",
-    "Up",
-    "Down",
-    "Left",
-    "Right"
+    "select",
+    "start",
+    "up",
+    "down",
+    "left",
+    "right"
 }
 
-local infile = io.open(infilename, "rb")
+print("Opening file" .. outfilename)
 local outfile = io.open(outfilename, "wb")
+print("Opening file" .. infilename)
+local infile = io.open(infilename, "rb")
 
 local prev_coins = 101
 local prev_lives = -1
@@ -37,6 +56,13 @@ local prev_status = -1
 local prev_rank = 256
 local prev_points = 0
 local prev_star_timer = 0
+
+-- Register stop function
+function on_emulation_exit()
+    print("Exiting")
+    outfile:close()
+    infile:close()
+end
 
 function getRewardSMB()
     -- Coins
@@ -119,31 +145,41 @@ end
 
 function postToPredict(state, rewward)
     -- Write the state to the output pipe
+    print(state:len())
     outfile:write(state)
     -- Write the reward as a 0-padded string representation
     -- of the floating point value of exactly 8 characters
     if reward == nil then
-        outfile:write("    nan")
+        outfile:write("     nan")
     else
         outfile:write(string.format("%8.3f", reward))
     end
+    outfile:flush()
 
     -- Read the prediction as an 8 1-character representations
     -- of the button states (0 = false, 1 = true)
     -- return a table of the states
+    -- print("reading predictions")
     local prediction = infile:read(8)
     local actions = {}
-    for i = 1, 8 do
-        if prediction:sub(i, i) == "1" then
-            button = BUTTONS[i]
-            actions[button] = true
+    if prediction ~= nil then
+        for i = 1, 8 do
+            if prediction:sub(i, i) == "1" then
+                button = BUTTONS[i]
+                actions[button] = true
+            end
         end
+    else
+        print("prediction is nil")
     end
+    actions = {}
+    actions['start'] = true
     return actions
 end
 
 -- Main emulation loop
 while true do
+    print(emu.framecount())
     local state = getState()   -- Resulting from last action or first state
     local reward = getReward() -- Resulting from last action or 0
     local actions = postToPredict(state, reward)

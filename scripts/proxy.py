@@ -32,13 +32,23 @@ if __name__ == "__main__":
     in_mapping = [pair.split(":") for pair in args.request_mapping.split(",")]
     out_mapping = [pair.split(":") for pair in args.response_mapping.split(",")]
 
+    print("opening {} for reading".format(args.input))
     with open(args.input, "rb") as infile:
+        print('Opened input file: ', args.input)
         with open(args.output, "wb") as outfile:
+            print('Opened output file: ', args.output)
             while True:
                 data = {}
                 for key, size in in_mapping:
-                    data[key] = base64.encodebytes(infile.read(int(size)))
+                    print(f"Reading {size} bytes for request key {key}...")
+                    bytes_ = infile.read(int(size))
+                    if len(bytes_) == 0:
+                        print("Reached end of file, exiting...")
+                        exit(0)
+                    encoded = str(base64.encodebytes(bytes_), "utf-8")
+                    data[key] = encoded
 
+                print(f"Posting data to {args.url}...")
                 resp = requests.post(args.url, json=data)
                 resp.raise_for_status()
                 resp = resp.json()
@@ -49,4 +59,7 @@ if __name__ == "__main__":
                     if not hasattr(value, "__iter__"):
                         value = [value]
                     for v in value:
-                            outfile.write(str(v).ljust(int(size)))
+                        output = str(v).ljust(int(size)).encode("utf-8")
+                        print(f"Writing {len(output)} bytes as or response key {key}...")
+                        outfile.write(output)
+                        outfile.flush()
