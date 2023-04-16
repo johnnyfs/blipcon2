@@ -5,3 +5,5 @@ lz4
 matplotlib
 pygame
 opencv-python
+requests
+argparse
