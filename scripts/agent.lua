@@ -1,3 +1,16 @@
+-- Writes raw states to a named file (presumably a pipe),
+-- and reads raw actions from another file. If a game code
+-- is specified and recognized, then custom logic will be
+-- used to determine the reward for the state. Otherwise,
+-- the reward will be NaN. (Signaling that a novelty-based
+-- reward should be used by the predictor instead.)
+local infilename = args[1]   -- required
+local outfilename = args[2]  -- required
+local game = 'undefined'
+if args:len() > 2 then
+    game = args[3]
+end
+
 local ADVANCE_REWARD = 100.0 -- also game over penalty
 local LIFE_REWARD = 10.0     -- for gain or loss of 1 life
 local POWER_REWARD = 5.0     -- status up or down or starman
@@ -15,8 +28,6 @@ local BUTTONS= {
     "Right"
 }
 
-local infilename = args[0]
-local outfilename = args[1]
 local infile = io.open(infilename, "rb")
 local outfile = io.open(outfilename, "wb")
 
@@ -27,7 +38,7 @@ local prev_rank = 256
 local prev_points = 0
 local prev_star_timer = 0
 
-function getReward()
+function getRewardSMB()
     -- Coins
     local coins = memory.readbyte(0x075E) * 1 + memory.readbyte(0x075F) * 10
     local coin_diff = 0
@@ -94,8 +105,16 @@ function getReward()
     return reward
 end
 
+function getReward()
+    if game == 'smb' then
+        return getRewardSMB()
+    else
+        return nil
+    end
+end
+
 function getState()
-    return ""
+    return gui.gdscreenshot()
 end
 
 function postToPredict(state, rewward)
@@ -103,7 +122,11 @@ function postToPredict(state, rewward)
     outfile:write(state)
     -- Write the reward as a 0-padded string representation
     -- of the floating point value of exactly 8 characters
-    outfile:write(string.format("%8.3f", reward))
+    if reward == nil then
+        outfile:write("    nan")
+    else
+        outfile:write(string.format("%8.3f", reward))
+    end
 
     -- Read the prediction as an 8 1-character representations
     -- of the button states (0 = false, 1 = true)
@@ -123,8 +146,7 @@ end
 while true do
     local state = getState()   -- Resulting from last action or first state
     local reward = getReward() -- Resulting from last action or 0
-    local action = postToPredict(state, reward)
-    local button = BUTTONS[action]
-    joypad.set(1, {[button] = true})
+    local actions = postToPredict(state, reward)
+    joypad.set(1, actions)
     emu.frameadvance()
 end
