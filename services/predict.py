@@ -61,11 +61,10 @@ def predict():
         action_override = data.get('action_override', None)
         if action_override is not None:
             action_override = torch.tensor(action_override).unsqueeze(0).to('cuda')
-        print(f'state {state.shape}; reward {reward}; action_override: {action_override}')
+    print(f'/predict type {type_}; state {state.shape}; reward {reward}; action_override: {action_override}')
     with torch.no_grad():
         encoding = ae.encode(state)
         reconstruction = ae.decode(encoding)
-        print(reconstruction.shape)
         if DISPLAY:
             img = reconstruction.detach().cpu().squeeze(0).permute(2, 1, 0).numpy() * 255
             img = img.astype('uint8')
@@ -84,7 +83,7 @@ def predict():
 
     # Convert tensor to a list of floats
     actions = action_probabilities.tolist()
-    print(f'Actions: {actions}')
+    print(f'responding with actions: {actions}')
 
     return jsonify({'actions': actions})
 

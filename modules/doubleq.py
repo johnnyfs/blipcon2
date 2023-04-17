@@ -194,7 +194,10 @@ class DoubleDQNAgent:
         else:
             Q_targets_next = self.qnetwork_target(next_states, rpss, rpas)
             Q_targets = rewards.repeat(1, self.action_size) + (gamma * Q_targets_next * (1 - dones.repeat(1, self.action_size)))
-            Q_expected = self.qnetwork_local(states).gather(1, actions)
+            local_out = self.qnetwork_local(states)
+            print('local_out shape', local_out.shape)
+            print('actions shape', actions.shape)
+            Q_expected = self.qnetwork_local(states).gather(1, actions.squeeze(1))
 
         loss = F.mse_loss(Q_expected, Q_targets)
         self.losses.append(loss.item())
