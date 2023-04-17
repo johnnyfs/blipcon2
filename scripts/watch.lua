@@ -18,6 +18,8 @@ function display_values()
     local mario_statuses = {"Small", "Big", "Fiery"}
     local invincibility_timer = memory.readbyte(0x079F)
     local level_end = memory.readbyte(0x07B8)
+    local position = memory.readbyte(0x071d)
+    local paused = memory.readbyte(0x0776)
 
     print("Coins: " .. coins)
     print("Time Remaining: " .. time_remaining)
@@ -28,10 +30,12 @@ function display_values()
     print("Mario Status: " .. mario_statuses[mario_status + 1])
     print("Invincibility Timer: " .. invincibility_timer)
     print("Level End: " .. level_end)
+    print("Position: " .. position)
+    print("Paused: " .. paused)
     print("---")
 end
 
 while true do
-    -- display_values()
+    display_values()
     emu.frameadvance()
 end

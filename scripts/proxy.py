@@ -55,6 +55,7 @@ if __name__ == "__main__":
                 
                 for key, size in out_mapping:
                     value = resp[key]
+                    print(f"Got response key {key} with value {value}...")
                     # If value iterable, write one value per size
                     if not hasattr(value, "__iter__"):
                         value = [value]
