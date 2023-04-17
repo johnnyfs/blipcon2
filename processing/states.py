@@ -24,7 +24,7 @@ def from_raw_state(gdstr):
     return to_tensor(img)
 
 # Load an lz4 compressed state file
-def load_states(filename):
+def load_states(filename, expect_reward=False):
     with lz4.frame.open(filename, 'r') as f:
         # The first full line is the image state as text
         prev_gdstr = None
@@ -34,6 +34,9 @@ def load_states(filename):
             gdstr = f.read(256 * 240 * 4 + 11)
             if gdstr is None or len(gdstr) != 256 * 240 * 4 + 11:
                 return
+            if expect_reward:
+                reward = f.read(8)
+                reward = float(reward)
             buttons = f.read(8)
             if buttons is None or len(buttons) != 8:
                 return
@@ -47,9 +50,13 @@ def load_states(filename):
 
             # Action is button states as text "ABsSUDLR"
             # (where s = select and S = start)
-            action = torch.tensor([float(x) for x in buttons])
+            action = [int(x) for x in str(buttons, 'utf-8')]
+            action = torch.tensor(action, dtype=torch.int64)
 
-            yield (state, action)
+            if expect_reward:
+                yield (state, action, reward)
+            else:
+                yield (state, action)
 
 
 def _load_or_add(path, cache, max_size=512):

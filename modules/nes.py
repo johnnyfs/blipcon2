@@ -379,7 +379,7 @@ class ResNetAE(nn.Module):
                                   dropout=dropout,
                                   residual=residual)
             self.encoder.add_module(f'dblock{i}', block)
-        self.mid = nn.Sequential(
+        self.mid1 = nn.Sequential(
             MiniMid(layers[-1],
                             norm_groups=norm_groups,
                             num_layers=2,
@@ -388,7 +388,9 @@ class ResNetAE(nn.Module):
                             residual=residual),
             nn.GroupNorm(norm_groups, layers[-1]),
             get_module_for(nonlinearity),
-            nn.Conv2d(layers[-1], latent_channels, 1),
+            nn.Conv2d(layers[-1], latent_channels, 1)
+        )
+        self.mid2 = nn.Sequential(
             nn.Conv2d(latent_channels, layers[-1], 1),
             MiniMid(layers[-1],
                            norm_groups=norm_groups,
@@ -424,11 +426,16 @@ class ResNetAE(nn.Module):
         pass
     
     def encode(self, x):
-        return self.encode(x)
+        x = self.encoder(x)
+        return self.mid1(x)
+    
+    def decode(self, x):
+        x = self.mid2(x)
+        return self.decoder(x)
 
     def forward(self, x):
-        x = self.encoder(x)
-        return self.decoder(x)
+        x = self.encode(x)
+        return self.decode(x)
 
     def set_temperature(self, temperature, hard=False):
         self.decoder.set_temperature(temperature, hard)
