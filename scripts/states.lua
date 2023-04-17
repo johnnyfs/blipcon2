@@ -22,12 +22,12 @@ function writeInputToFile()
         "%d%d%d%d%d%d%d%d",
         inputTable["A"] and 1 or 0,
         inputTable["B"] and 1 or 0,
-        inputTable["Select"] and 1 or 0,
-        inputTable["Start"] and 1 or 0,
-        inputTable["Up"] and 1 or 0,
-        inputTable["Down"] and 1 or 0,
-        inputTable["Left"] and 1 or 0,
-        inputTable["Right"] and 1 or 0
+        inputTable["select"] and 1 or 0,
+        inputTable["start"] and 1 or 0,
+        inputTable["up"] and 1 or 0,
+        inputTable["down"] and 1 or 0,
+        inputTable["left"] and 1 or 0,
+        inputTable["right"] and 1 or 0
     )
     pipe:write(inputString)
 end

@@ -8,6 +8,8 @@ from processing.states import from_raw_state
 from modules.doubleq import DoubleDQNAgent
 from modules.enums import NonLinearity
 from modules.nes import ResNetAE
+from visualization.graphs import mk_pil_graph
+from visualization.images import pil_to_surface
 
 DISPLAY=True
 
@@ -38,7 +40,7 @@ ae.eval()
 app = Flask(__name__)
 
 if DISPLAY==True:
-    screen = pygame.display.set_mode((256, 240))
+    screen = pygame.display.set_mode((256, 240 * 2))
 
 @app.route('/predict', methods=['POST'])
 def predict():
@@ -69,7 +71,12 @@ def predict():
             img = img.astype('uint8')
             img = pygame.surfarray.make_surface(img)
             screen.blit(img, (0, 0))
+            
+            img = mk_pil_graph((256, 240), agent.losses, 'Losses', 'Step', 'Loss')
+            img = pil_to_surface(img)
+            screen.blit(img, (0, 240))
             pygame.display.flip()
+            
         embedding = encoding.flatten()
 
     # TODO: capture terminal state (is there such a thing?)

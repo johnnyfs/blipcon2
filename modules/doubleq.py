@@ -58,15 +58,12 @@ class QNetworkHybrid(nn.Module):
         self.target_size = target_size
         
     def forward(self, state, past_states=None, past_actions=None):
-        print(f'incoming shapes: s {state.shape}')
-        print(f'ps {past_states.shape if past_states is not None else None}, pa {past_actions.shape if past_actions is not None else None}')
         b, s = state.shape
 
         # Embed the actions in the states
         # First adding a dummy action for the last state
         if past_states is not None:
             _, z, a = past_actions.shape
-            print(f'size {z}')
             # # Push the length into the batch dimension
             past_states = past_states.reshape(-1, s)
             past_actions = past_actions.reshape(-1, a)
@@ -76,12 +73,8 @@ class QNetworkHybrid(nn.Module):
             # Restore the batch dimenson (with the new length)
             states = states.reshape(b, z + 1, s)
             embedded = embedded.reshape(b, z + 1, s)
-            print('pre encoding on the long path')
-            print(states.shape)
-            print(embedded.shape)
             encoded = self.positional(states + embedded)
         else:
-            print('size zero')
             encoded = self.positional(state.view(b, 1, s))
         
         # Apply attention
@@ -147,6 +140,8 @@ class DoubleDQNAgent:
         self.eps = eps
         self.eps_decay = eps_decay
         self.eps_min = eps_min
+        
+        self.losses = []
 
     def step(self, state, action, reward, next_state, done,
              recent_past_states=None, recent_past_actions=None):
@@ -167,11 +162,9 @@ class DoubleDQNAgent:
         self.qnetwork_local.eval()
         with torch.no_grad():
             if len(self.recent_past_states) == 0:
-                print('bootstrapping memory')
                 past_states = None
                 past_actions = None
             else:
-                print('building memory')
                 past_states = torch.stack([s for s in self.recent_past_states]).view(1, -1, self.state_size).to(self.device)
                 past_actions = torch.stack([a for a in self.recent_past_actions]).view(1, -1, self.action_size).to(self.device)
             action_values = self.qnetwork_local(state, past_states, past_actions)
@@ -194,20 +187,17 @@ class DoubleDQNAgent:
         rewards = rewards.unsqueeze(1)
         dones = dones.unsqueeze(1)
 
-        print('rpa rps shapes')
-        print(rpss.shape)
-        print(rpas.shape)
         if self.exclusive_actions:
             Q_targets_next = self.qnetwork_target(next_states, rpss, rpas).detach().max(1)[0].unsqueeze(1)
             Q_targets = rewards / self.action_size + (gamma * Q_targets_next * (1 - dones))
             Q_expected = self.qnetwork_local(states).gather(1, actions).max(1)[0].unsqueeze(1)
         else:
             Q_targets_next = self.qnetwork_target(next_states, rpss, rpas)
-            print('Q_targets_next shape', Q_targets_next.shape)
             Q_targets = rewards.repeat(1, self.action_size) + (gamma * Q_targets_next * (1 - dones.repeat(1, self.action_size)))
             Q_expected = self.qnetwork_local(states).gather(1, actions)
 
         loss = F.mse_loss(Q_expected, Q_targets)
+        self.losses.append(loss.item())
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
