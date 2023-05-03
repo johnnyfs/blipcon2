@@ -36,7 +36,7 @@ else
     free_play = false
 end
 
-local FRAME_SKIP = 3
+local FRAME_SKIP = 0
 local ADVANCE_REWARD = 100.0 -- also game over penalty
 local LIFE_REWARD = 10.0     -- for gain or loss of 1 life
 local POWER_REWARD = 5.0     -- status up or down or starman
@@ -131,10 +131,10 @@ function getRewardSMB()
         no_advance_timer = no_advance_timer + 1
     end
     local no_advance_time = 0
-    if no_advance_timer > 16 then
+    if no_advance_timer > 256 then
         -- Intensity should increase gradually,(non-linearly)
         -- so we use a square root function.
-        no_advance_time = math.sqrt(no_advance_timer - 16)
+        no_advance_time = math.sqrt(no_advance_timer - 256)
     end
 
     -- Score
@@ -170,21 +170,20 @@ function getRewardSMB()
         star_timer_diff * POWER_REWARD +
         coin_diff * COIN_REWARD +
         points_diff * POINT_REWARD +
-        position_diff * STEP_REWARD
-        --no_advance_time * -NO_STEP_PENALTY
+        position_diff * STEP_REWARD +
+        no_advance_time * -NO_STEP_PENALTY
 
---  if reward ~= 0 then
---        print('REWARD:')
---        print("coins: " .. coins .. " versus previous " .. prev_coins)
---        print("lives: " .. lives .. " versus previous " .. prev_lives)
---        print("status: " .. status .. " versus previous " .. prev_status)
---        print("rank: " .. rank .. " versus previous " .. prev_rank)
---        print("points: " .. points .. " versus previous " .. prev_points)
---        print("position: " .. position .. " versus previous " .. prev_position)
---        print("star timer: " .. star_timer_diff .. " versus previous " .. prev_star_timer)
---        print("paused: " .. paused .. " versus previous " .. prev_paused)
---        print("TOTAL: " .. reward)
---    end
+  if reward ~= 0 then
+        print('REWARD:')
+        print("coins: " .. coins .. " versus previous " .. prev_coins)
+        print("lives: " .. lives .. " versus previous " .. prev_lives)
+        print("status: " .. status .. " versus previous " .. prev_status)
+        print("rank: " .. rank .. " versus previous " .. prev_rank)
+        print("points: " .. points .. " versus previous " .. prev_points)
+        print("position: " .. position .. " versus previous " .. prev_position)
+        print("star timer: " .. star_timer_diff .. " versus previous " .. prev_star_timer)
+        print("TOTAL: " .. reward)
+    end
 
     return reward
 end
@@ -193,6 +192,7 @@ function getReward()
     if game == 'smb' then
         return getRewardSMB()
     else
+        print('Unknown game: ' .. game)
         return nil
     end
 end
@@ -201,7 +201,7 @@ function getState()
     return gui.gdscreenshot()
 end
 
-function postToPredict(state, rewward)
+function postToPredict(state, reward)
     -- Write the state to the output pipe
     outfile:write(state)
     -- Write the reward as a 0-padded string representation
@@ -255,7 +255,6 @@ while true do
         if first then
             actions['start'] = true
         else
-            print('prediction')
             actions = postToPredict(state, reward)
         end
 

@@ -42,6 +42,8 @@ if __name__ == "__main__":
                 for key, size in in_mapping:
                     print(f"Reading {size} bytes for request key {key}...")
                     bytes_ = infile.read(int(size))
+                    if int(size) <= 16:
+                        print(f"Read {bytes_} for request key {key}...")
                     if len(bytes_) == 0:
                         print("Reached end of file, exiting...")
                         exit(0)
